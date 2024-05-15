@@ -22,19 +22,18 @@ provider "aws" {
 ##
 resource "aws_s3_bucket" "todos_data_bucket" {
   bucket  = "${var.group_alias}-data"
-  key     = ""
-  content = "This bucket is used for ${var.group_alias} application data"
-  tags = [
+  tags = {
     Name     = "${var.group_alias}-data-bucket"
     Capstone = "${var.group_alias}"
-  ]
+    Description = "This bucket is used for ${var.group_alias} application data"
+  }
 }
 
 ##
 ## Upload the application data to the S3 bucket
 ##
 resource "aws_s3_object" "todos_app_data" {
-  bucket = aws_s3_bucket.todos_data_bucket
+  bucket = aws_s3_bucket.todos_data_bucket.id
   key    = "${var.todo_source_file}"
   source = "${var.todo_source_file}"
 
@@ -42,6 +41,10 @@ resource "aws_s3_object" "todos_app_data" {
   # For Terraform 0.11.11 and earlier, use the md5() function and the file() function:
   # etag = "${md5(file("path/to/file"))}"
   etag = filemd5("${var.todo_source_file}")
+  tags = {
+    Name     = "${var.group_alias}-app-data"
+    Capstone = "${var.group_alias}"
+  }
 }
 
 ##
@@ -66,48 +69,54 @@ data "aws_iam_policy_document" "lambda_assume_role" {
 resource "aws_iam_role" "lambda_iam_role" {
   name               = "${var.group_alias}_lambda_role"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+  tags = {
+    Name     = "${var.group_alias}-lambda-iam-role"
+    Capstone = "${var.group_alias}"
+  }
 }
 
 ## Package the Lambda function code into a Zip file
 data "archive_file" "lambda_archive_get_todos" {
   type = "zip"
- 
   source_file = "${path.module}/lambda_get_todos.py"
   output_path = "${path.module}/lambda_get_todos_payload.zip"
 }
 
 resource "aws_s3_object" "lambda_get_todos_src" {
   bucket = aws_s3_bucket.todos_data_bucket.id
- 
   key    = "lambda_get_todos.zip"
   source = data.archive_file.lambda_archive_get_todos.output_path
- 
   etag = filemd5(data.archive_file.lambda_archive_get_todos.output_path)
+  tags = {
+    Name     = "${var.group_alias}-lambda-code"
+    Capstone = "${var.group_alias}"
+  }
 }
 
 ## Define Lambda function
 resource "aws_lambda_function" "lambda_function_gettodos" {
   s3_bucket = aws_s3_object.lambda_get_todos_src.bucket
-  s3_key.   = aws_s3_object.lambda_get_todos_src.key
+  s3_key    = aws_s3_object.lambda_get_todos_src.key
   function_name = "${var.group_alias}-GetTodos"
   runtime = "python3.12"
   handler = "lambda_function.lambda_handler"
   source_code_hash = data.archive_file.lambda_archive_get_todos.output_base64sha256
- 
   role = aws_iam_role.lambda_iam_role.arn
-
   description = "Lambda function to retrieve the application data for the API Gateway"
-  
-  tags = [
+  tags = {
     Name     = "${var.group_alias}-GetTodos"
     Capstone = "${var.group_alias}"
-  ]
+  }
 }
 
 ## Define Lambda function log stream and access
 resource "aws_cloudwatch_log_group" "lambda_log_gettodos" {
   name = "/aws/lambda/${aws_lambda_function.lambda_function_gettodos.function_name}"
   retention_in_days = 5
+  tags = {
+    Name     = "${var.group_alias}-lambda-log-group"
+    Capstone = "${var.group_alias}"
+  }
 }
 
 data "aws_iam_policy_document" "lambda_logging" {
@@ -129,6 +138,10 @@ resource "aws_iam_policy" "lambda_logging" {
   path        = "/"
   description = "IAM policy for logging from a lambda"
   policy      = data.aws_iam_policy_document.lambda_logging.json
+  tags = {
+    Name     = "${var.group_alias}-lambda-logging-policy"
+    Capstone = "${var.group_alias}"
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_logs" {
