@@ -266,16 +266,15 @@ resource "aws_ecr_repository" "ecr_repo" {
 ## CodeBuild Project (with webhook)
 ##
 
-## Create an S3 bucket for the build output artifacts
-resource "aws_s3_bucket" "build_artifact_bucket" {
-  bucket  = "${var.group_alias}-build-artifacts"
-  tags = {
-    Name     = "${var.group_alias}-build-artifacts-bucket"
-    Capstone = "${var.group_alias}"
-    Description = "This bucket is used for ${var.group_alias} build artifacts output data"
-  }
-}
-
+# ## Create an S3 bucket for the build output artifacts -- not needed for CODEPIPELINE output
+# resource "aws_s3_bucket" "build_artifact_bucket" {
+#   bucket  = "${var.group_alias}-build-artifacts"
+#   tags = {
+#     Name     = "${var.group_alias}-build-artifacts-bucket"
+#     Capstone = "${var.group_alias}"
+#     Description = "This bucket is used for ${var.group_alias} build artifacts output data"
+#   }
+# }
 
 
 data "aws_iam_policy_document" "assume_role" {
@@ -291,8 +290,9 @@ data "aws_iam_policy_document" "assume_role" {
   }
 }
 
-resource "aws_iam_role" "example" {
-  name               = "example"
+resource "aws_iam_role" "code_build_role" {
+  name               = "${var.group_alias}-codebuild-role"
+  description        = "Allows CodeBuild to call AWS services on your behalf."
   assume_role_policy = data.aws_iam_policy_document.assume_role.json
 }
 
@@ -347,14 +347,14 @@ data "aws_iam_policy_document" "example" {
     }
   }
 
-  statement {
-    effect  = "Allow"
-    actions = ["s3:*"]
-    resources = [
-      aws_s3_bucket.example.arn,
-      "${aws_s3_bucket.example.arn}/*",
-    ]
-  }
+  # statement {
+  #   effect  = "Allow"
+  #   actions = ["s3:*"]
+  #   resources = [
+  #     aws_s3_bucket.example.arn,
+  #     "${aws_s3_bucket.example.arn}/*",
+  #   ]
+  # }
 }
 
 resource "aws_iam_role_policy" "example" {
@@ -371,7 +371,7 @@ resource "aws_codebuild_project" "build_docker_image" {
   name          = "${var.group_alias}-react-docker-build"
   description   = "Group 3 Capstone 2 React application build in a Docker Image (Terraform)"
   build_timeout = 5
-  service_role  = aws_iam_role.example.arn
+  service_role  = aws_iam_role.code_build_role.arn
 
   source {
     type            = "GITHUB"

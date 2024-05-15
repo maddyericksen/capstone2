@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: grp3-cap2a-cluster
+    app.kubernetes.io/instance: grp3-cap2a-instance
+    app.kubernetes.io/version: '1.0.0'
+    app.kubernetes.io/managed-by: kubectl
+  name: grp3-cap2a-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grp3-cap2a-cluster
+  template:
+    metadata:
+      labels:
+        app: grp3-cap2a-cluster
+    spec:
+      containers:
+        - image: 962804699607.dkr.ecr.us-west-2.amazonaws.com/grp3-cap2a-ecr:latest
+          imagePullPolicy: Always
+          name: react-app
+          ports:
+            - containerPort: 3000
