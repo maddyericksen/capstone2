@@ -1,3 +1,7 @@
+##
+## main.tf
+##
+
 terraform {
   required_version = ">= 1.0"
   required_providers {
@@ -153,14 +157,6 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
 }
 
 
-# API Gateway
-#resource "aws_api_gateway_rest_api" "grp3-cap2b-api" {
-#  # Lambda proxy integration = False
-#
-#  triggers = {
-#  }
-#}
-
 ##
 ## Define the API Gateway to call the Lambda function
 ##
@@ -247,3 +243,233 @@ resource "aws_api_gateway_stage" "lambda_todo_api_stage" {
     Capstone = "${var.group_alias}"
   }
 }
+
+
+##
+## Create ECR Repository
+##
+resource "aws_ecr_repository" "ecr_repo" {
+  name                 = "${var.group_alias}-ecr"
+  image_tag_mutability = "MUTABLE"
+  tags = {
+    Name     = "${var.group_alias}-ecr"
+    Capstone = "${var.group_alias}"
+  }
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+
+##
+## CodeBuild Project (with webhook)
+##
+
+## Create an S3 bucket for the build output artifacts
+resource "aws_s3_bucket" "build_artifact_bucket" {
+  bucket  = "${var.group_alias}-build-artifacts"
+  tags = {
+    Name     = "${var.group_alias}-build-artifacts-bucket"
+    Capstone = "${var.group_alias}"
+    Description = "This bucket is used for ${var.group_alias} build artifacts output data"
+  }
+}
+
+
+
+data "aws_iam_policy_document" "assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["codebuild.amazonaws.com"]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "example" {
+  name               = "example"
+  assume_role_policy = data.aws_iam_policy_document.assume_role.json
+}
+
+data "aws_iam_policy_document" "example" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+
+    resources = ["*"]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:DescribeDhcpOptions",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DeleteNetworkInterface",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeVpcs",
+    ]
+
+    resources = ["*"]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["ec2:CreateNetworkInterfacePermission"]
+    resources = ["arn:aws:ec2:us-east-1:123456789012:network-interface/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:Subnet"
+
+      values = [
+        aws_subnet.example1.arn,
+        aws_subnet.example2.arn,
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:AuthorizedService"
+      values   = ["codebuild.amazonaws.com"]
+    }
+  }
+
+  statement {
+    effect  = "Allow"
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.example.arn,
+      "${aws_s3_bucket.example.arn}/*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "example" {
+  role   = aws_iam_role.example.name
+  policy = data.aws_iam_policy_document.example.json
+}
+
+
+
+
+
+## Create the build project
+resource "aws_codebuild_project" "build_docker_image" {
+  name          = "${var.group_alias}-react-docker-build"
+  description   = "Group 3 Capstone 2 React application build in a Docker Image (Terraform)"
+  build_timeout = 5
+  service_role  = aws_iam_role.example.arn
+
+  source {
+    type            = "GITHUB"
+    location        = "https://github.com/maddyericksen/capstone2.git"
+    buildspec       = "buildspec.yml"
+    git_clone_depth = 1
+
+    git_submodules_config {
+      fetch_submodules = false
+    }
+  }
+
+  source_version = "main"
+
+  artifacts {
+    type = "CODEPIPELINE"
+    # type      = "S3"
+    # location  = aws_s3_bucket.build_artifact_bucket.id
+    # name      = "build_artifacts"
+    # packaging = "ZIP"
+    # namespace = "NONE"
+  }
+
+  cache {
+    type     = "NO_CACHE"
+  }
+
+  environment {
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = "aws/codebuild/amazonlinux2-x86_64-standard:4.0"
+    type                        = "LINUX_CONTAINER"
+    image_pull_credentials_type = "CODEBUILD"
+
+    # environment_variable {
+    #   name  = "SOME_KEY1"
+    #   value = "SOME_VALUE1"
+    # }
+
+    # environment_variable {
+    #   name  = "SOME_KEY2"
+    #   value = "SOME_VALUE2"
+    #   type  = "PARAMETER_STORE"
+    # }
+  }
+
+  # logs_config {
+  #   cloudwatch_logs {
+  #     group_name  = "log-group"
+  #     stream_name = "log-stream"
+  #   }
+
+  #   s3_logs {
+  #     status   = "ENABLED"
+  #     location = "${aws_s3_bucket.example.id}/build-log"
+  #   }
+  # }
+
+  # vpc_config {
+  #   vpc_id = aws_vpc.example.id
+
+  #   subnets = [
+  #     aws_subnet.example1.id,
+  #     aws_subnet.example2.id,
+  #   ]
+
+  #   security_group_ids = [
+  #     aws_security_group.example1.id,
+  #     aws_security_group.example2.id,
+  #   ]
+  # }
+
+  tags = {
+    Name     = "${var.group_alias}-react-docker-build"
+    Capstone = "${var.group_alias}"
+    Environment = "Capstone2"
+  }
+}
+
+
+
+
+
+
+
+
+##
+##
+## Add next:
+##.  ECR Repository creation
+##.  CodeBuild Project to build the Docker Image
+##.  ECS Cluster
+##.    ECS Cluster definition using Fargate
+##.    Task Definition using ECR Repository Image
+##.    Service Definition
+##.    ALB to front-end the Service
+##.  CopdePipeline:
+##.    Source Action (retrieve GitHub source repo)
+##.    CodeBuild Action (use SourceAction artifacts for build input, create imagedefinitions.json for ECS deployment as build artifact)
+##.    CodeDeploy Action (use BuildAction artifacts for ECS deployment)
+##
+##

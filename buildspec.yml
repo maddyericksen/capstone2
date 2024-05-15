@@ -24,8 +24,8 @@ phases:
       - docker push ${REPOSITORY_URI}:$IMAGE_TAG
       - echo "Writing image definitions file..."
       - echo "Image definitions content *should* be:"
-      - printf '[{"name":"'$IMAGE_REPO_NAME'","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG
-      - printf '[{"name":"'$IMAGE_REPO_NAME'","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+      - printf '[{"name":"'$CONTAINER_NAME'","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG
+      - printf '[{"name":"'$CONTAINER_NAME'","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
 artifacts:
   files:
     - imagedefinitions.json
