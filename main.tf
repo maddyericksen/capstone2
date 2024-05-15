@@ -119,6 +119,7 @@ resource "aws_cloudwatch_log_group" "lambda_log_gettodos" {
   }
 }
 
+## Define the IAM Lambda Logging Policy (document method)
 data "aws_iam_policy_document" "lambda_logging" {
   statement {
     effect = "Allow"
@@ -133,6 +134,7 @@ data "aws_iam_policy_document" "lambda_logging" {
   }
 }
 
+## Define the IAM Lambda Logging Policy
 resource "aws_iam_policy" "lambda_logging" {
   name        = "${var.group_alias}_lambda_logging"
   path        = "/"
@@ -144,13 +146,11 @@ resource "aws_iam_policy" "lambda_logging" {
   }
 }
 
+## Define the IAM Lambda Lgging Policy attachement
 resource "aws_iam_role_policy_attachment" "lambda_logs" {
   role       = aws_iam_role.lambda_iam_role.name
   policy_arn = aws_iam_policy.lambda_logging.arn
 }
-
-
-
 
 
 # API Gateway
@@ -160,3 +160,90 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
 #  triggers = {
 #  }
 #}
+
+##
+## Define the API Gateway to call the Lambda function
+##
+resource "aws_api_gateway_rest_api" "lambda_todo_api" {
+  name = "${var.group_alias}-RestAPI"
+  description = "Group 3 Capstone2 REST API (Terraform)"
+  endpoint_configuration {
+    types = ["REGIONAL"]
+  }
+  tags = {
+    Name     = "${var.group_alias}-RestAPI"
+    Capstone = "${var.group_alias}"
+  }
+}
+
+resource "aws_api_gateway_resource" "lambda_todo_api_get_todo_resource" {
+  parent_id   = aws_api_gateway_rest_api.lambda_todo_api.root_resource_id
+  path_part   = "get-todo"
+  rest_api_id = aws_api_gateway_rest_api.lambda_todo_api.id
+}
+
+resource "aws_api_gateway_method" "lambda_todo_api_get_method" {
+  authorization = "NONE"
+  http_method   = "GET"
+  resource_id   = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
+  rest_api_id   = aws_api_gateway_rest_api.lambda_todo_api.id
+}
+
+resource "aws_api_gateway_method" "lambda_todo_api_options_method" {
+  authorization = "NONE"
+  http_method   = "OPTIONS"
+  resource_id   = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
+  rest_api_id   = aws_api_gateway_rest_api.lambda_todo_api.id
+}
+
+resource "aws_api_gateway_integration" "lambda_todo_api_get_integration" {
+  http_method = aws_api_gateway_method.lambda_todo_api_get_method.http_method
+  resource_id = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
+  rest_api_id = aws_api_gateway_rest_api.lambda_todo_api.id
+  integration_http_method = "POST"
+  type        = "AWS"
+  passthrough_behavior = "WHEN_NO_TEMPLATES"
+  uri = aws_lambda_function.lambda_function_gettodos.invoke_arn
+  ##. arn:aws:lambda:us-west-2:962804699607:function:grp3-cap2b-GetTodos
+}
+
+resource "aws_api_gateway_integration" "lambda_todo_api_options_integration" {
+  http_method = aws_api_gateway_method.lambda_todo_api_options_method.http_method
+  resource_id = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
+  rest_api_id = aws_api_gateway_rest_api.lambda_todo_api.id
+  type        = "MOCK"
+}
+
+resource "aws_api_gateway_deployment" "lambda_todo_api_deployment" {
+  rest_api_id = aws_api_gateway_rest_api.lambda_todo_api.id
+  description = "Lambda Function RestApi Prod Deployment"
+  triggers = {
+    # NOTE: The configuration below will satisfy ordering considerations,
+    #       but not pick up all future REST API changes. More advanced patterns
+    #       are possible, such as using the filesha1() function against the
+    #       Terraform configuration file(s) or removing the .id references to
+    #       calculate a hash against whole resources. Be aware that using whole
+    #       resources will show a difference after the initial implementation.
+    #       It will stabilize to only change when resources change afterwards.
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id,
+      aws_api_gateway_method.lambda_todo_api_get_method.id,
+      aws_api_gateway_integration.lambda_todo_api_get_integration.id,
+    ]))
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_api_gateway_stage" "lambda_todo_api_stage" {
+  deployment_id = aws_api_gateway_deployment.lambda_todo_api_deployment.id
+  rest_api_id   = aws_api_gateway_rest_api.lambda_todo_api.id
+  stage_name    = "prod"
+  description   = "Lambda Function RestApi Prod Deployment Stage"
+  tags = {
+    Name     = "${var.group_alias}-RestAPI-Prod-Stage"
+    Capstone = "${var.group_alias}"
+  }
+}
