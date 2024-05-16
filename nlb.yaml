@@ -3,17 +3,14 @@ kind: Service
 metadata:
   name: grp3-cap2a-eks2-nlb
   annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: external
-    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
-    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: instance
+    kubernetes.io/aws-load-balancer-type: external
+    kubernetes.io/aws-load-balancer-scheme: internet-facing
+    kubernetes.io/aws-load-balancer-nlb-target-type: instance
 spec:
   type: LoadBalancer
   ports:
     - port: 80
+      protocol: TCP
       targetPort: 3000
-      name: http
   selector:
-    app.kubernetes.io/name: grp3-cap2a-eks2
-    app.kubernetes.io/instance: grp3-cap2a-eks2-instance
-    app.kubernetes.io/component: service
     app: grp3-cap2a-eks2
