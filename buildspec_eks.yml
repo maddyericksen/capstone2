@@ -13,7 +13,7 @@ phases:
   pre_build:
     commands:
       - echo "Logging into Amazon EKS..."
-      - aws eks --region us-west-2 update-kubeconfig --name grp3-cap2a-cluster
+      - aws eks --region us-west-2 update-kubeconfig --name grp3-cap2a-eks2
       - echo "Check config"
       - kubectl config view --minify
       - echo "Check kubectl access"

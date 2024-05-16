@@ -2,15 +2,15 @@ apiVersion: v1
 kind: Service
 metadata:
   labels:
-    app.kubernetes.io/name: grp3-cap2a-cluster
-    app.kubernetes.io/instance: grp3-cap2a-instance
+    app.kubernetes.io/name: grp3-cap2a-eks2
+    app.kubernetes.io/instance: grp3-cap2a-eks2-instance
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/component: backend
     app.kubernetes.io/managed-by: kubectl
-  name: grp3-cap2a-service
+  name: grp3-cap2a-eks2-service
 spec:
   selector:
-    app: grp3-cap2a-cluster
+    app: grp3-cap2a-eks2
   type: NodePort
   ports:
     - protocol: TCP
