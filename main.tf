@@ -82,13 +82,13 @@ resource "aws_iam_role" "lambda_iam_role" {
 ## Package the Lambda function code into a Zip file
 data "archive_file" "lambda_archive_get_todos" {
   type = "zip"
-  source_file = "${path.module}/lambda_get_todos.py"
-  output_path = "${path.module}/lambda_get_todos_payload.zip"
+  source_file = "${path.module}/lambda/lambda_function.py"
+  output_path = "${path.module}/lambda/lambda_function_payload.zip"
 }
 
 resource "aws_s3_object" "lambda_get_todos_src" {
   bucket = aws_s3_bucket.todos_data_bucket.id
-  key    = "lambda_get_todos.zip"
+  key    = "lambda_function.zip"
   source = data.archive_file.lambda_archive_get_todos.output_path
   etag = filemd5(data.archive_file.lambda_archive_get_todos.output_path)
   tags = {
@@ -138,9 +138,20 @@ data "aws_iam_policy_document" "lambda_logging" {
   }
 }
 
+## Define a policy document to use for the Role assignment
+data "aws_iam_policy_document" "lambda_s3" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "s3:GetObject"
+    ]
+    resources = ["arn:aws:s3:::*"]
+  }
+}
+
 ## Define the IAM Lambda Logging Policy
 resource "aws_iam_policy" "lambda_logging" {
-  name        = "${var.group_alias}_lambda_logging"
+  name        = "${var.group_alias}_lambda_logging_policy"
   path        = "/"
   description = "IAM policy for logging from a lambda"
   policy      = data.aws_iam_policy_document.lambda_logging.json
@@ -150,10 +161,27 @@ resource "aws_iam_policy" "lambda_logging" {
   }
 }
 
+## Define the IAM Lambda S3 Policy
+resource "aws_iam_policy" "lambda_s3" {
+  name        = "${var.group_alias}_lambda_s3_policy"
+  description = "IAM policy for S3 access from a lambda"
+  policy      = data.aws_iam_policy_document.lambda_s3.json
+  tags = {
+    Name     = "${var.group_alias}-lambda-s3-policy"
+    Capstone = "${var.group_alias}"
+  }
+}
+
 ## Define the IAM Lambda Lgging Policy attachement
 resource "aws_iam_role_policy_attachment" "lambda_logs" {
   role       = aws_iam_role.lambda_iam_role.name
   policy_arn = aws_iam_policy.lambda_logging.arn
+}
+
+## Define the IAM Lambda S3 Policy attachement
+resource "aws_iam_role_policy_attachment" "lambda_s3" {
+  role       = aws_iam_role.lambda_iam_role.name
+  policy_arn = aws_iam_policy.lambda_s3.arn
 }
 
 
@@ -192,6 +220,38 @@ resource "aws_api_gateway_method" "lambda_todo_api_options_method" {
   rest_api_id   = aws_api_gateway_rest_api.lambda_todo_api.id
 }
 
+resource "aws_api_gateway_method_response" "lambda_todo_api_get_method_resp_200" {
+  rest_api_id = aws_api_gateway_rest_api.lambda_todo_api.id
+  resource_id = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
+  http_method = aws_api_gateway_method.lambda_todo_api_get_method.http_method
+  status_code = "200"
+  response_models = {
+    "application/json" = "Empty"
+  }
+  response_parameters = {
+    "method.response.header.Content-Type"                = true,
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+  depends_on = [aws_api_gateway_method.lambda_todo_api_get_method]
+}
+
+resource "aws_api_gateway_method_response" "lambda_todo_api_options_method_resp_200" {
+  rest_api_id = aws_api_gateway_rest_api.lambda_todo_api.id
+  resource_id = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
+  http_method = aws_api_gateway_method.lambda_todo_api_options_method.http_method
+  status_code = "200"
+  response_models = {
+    "application/json" = "Empty"
+  }
+  response_parameters = {
+    "method.response.header.Content-Type"                 = true,
+    "method.response.header.Access-Control-Allow-Origin"  = true,
+    "method.response.header.Access-Control-Allow-Methods" = true,
+    "method.response.header.Access-Control-Allow-Headers" = true
+  }
+  depends_on = [aws_api_gateway_method.lambda_todo_api_options_method]
+}
+
 resource "aws_api_gateway_integration" "lambda_todo_api_get_integration" {
   http_method = aws_api_gateway_method.lambda_todo_api_get_method.http_method
   resource_id = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
@@ -201,6 +261,10 @@ resource "aws_api_gateway_integration" "lambda_todo_api_get_integration" {
   passthrough_behavior = "WHEN_NO_TEMPLATES"
   uri = aws_lambda_function.lambda_function_gettodos.invoke_arn
   ##. arn:aws:lambda:us-west-2:962804699607:function:grp3-cap2b-GetTodos
+  depends_on = [
+    aws_api_gateway_method.lambda_todo_api_get_method,
+    aws_lambda_function.lambda_function_gettodos
+    ]
 }
 
 resource "aws_api_gateway_integration" "lambda_todo_api_options_integration" {
@@ -208,6 +272,49 @@ resource "aws_api_gateway_integration" "lambda_todo_api_options_integration" {
   resource_id = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
   rest_api_id = aws_api_gateway_rest_api.lambda_todo_api.id
   type        = "MOCK"
+  depends_on = [aws_api_gateway_method.lambda_todo_api_options_method]
+}
+
+resource "aws_api_gateway_integration_response" "lambda_todo_api_get_integration_resp" {
+  rest_api_id = aws_api_gateway_rest_api.lambda_todo_api.id
+  resource_id = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
+  http_method = aws_api_gateway_method.lambda_todo_api_get_method.http_method
+  status_code = aws_api_gateway_method_response.lambda_todo_api_get_method_resp_200.status_code
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin" = "'*'"
+  }
+  depends_on = [
+    aws_api_gateway_method.lambda_todo_api_get_method,
+    aws_api_gateway_integration.lambda_todo_api_get_integration,
+    aws_api_gateway_method_response.lambda_todo_api_get_method_resp_200
+    ]
+}
+
+resource "aws_api_gateway_integration_response" "lambda_todo_api_options_integration_resp" {
+  rest_api_id = aws_api_gateway_rest_api.lambda_todo_api.id
+  resource_id = aws_api_gateway_resource.lambda_todo_api_get_todo_resource.id
+  http_method = aws_api_gateway_method.lambda_todo_api_options_method.http_method
+  status_code = aws_api_gateway_method_response.lambda_todo_api_options_method_resp_200.status_code
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+  }
+  depends_on = [
+    aws_api_gateway_method.lambda_todo_api_options_method,
+    aws_api_gateway_method_response.lambda_todo_api_options_method_resp_200
+    ]
+}
+
+resource "aws_api_gateway_stage" "lambda_todo_api_stage" {
+  deployment_id = aws_api_gateway_deployment.lambda_todo_api_deployment.id
+  rest_api_id   = aws_api_gateway_rest_api.lambda_todo_api.id
+  stage_name    = "prod"
+  description   = "Lambda Function RestApi Prod Deployment Stage"
+  tags = {
+    Name     = "${var.group_alias}-RestAPI-Prod-Stage"
+    Capstone = "${var.group_alias}"
+  }
 }
 
 resource "aws_api_gateway_deployment" "lambda_todo_api_deployment" {
@@ -231,17 +338,15 @@ resource "aws_api_gateway_deployment" "lambda_todo_api_deployment" {
   lifecycle {
     create_before_destroy = true
   }
+  depends_on = [aws_api_gateway_integration.lambda_todo_api_get_integration]
 }
 
-resource "aws_api_gateway_stage" "lambda_todo_api_stage" {
-  deployment_id = aws_api_gateway_deployment.lambda_todo_api_deployment.id
-  rest_api_id   = aws_api_gateway_rest_api.lambda_todo_api.id
-  stage_name    = "prod"
-  description   = "Lambda Function RestApi Prod Deployment Stage"
-  tags = {
-    Name     = "${var.group_alias}-RestAPI-Prod-Stage"
-    Capstone = "${var.group_alias}"
-  }
+resource "aws_lambda_permission" "apigw_lambda" {
+    statement_id  = "AllowExecutionFromAPIGateway"
+    action        = "lambda:InvokeFunction"
+    function_name = aws_lambda_function.lambda_function_gettodos.arn
+    principal     = "apigateway.amazonaws.com"
+    source_arn    = "arn:aws:execute-api:${var.region}:${var.account_id}:${aws_api_gateway_rest_api.lambda_todo_api.id}/*/${aws_api_gateway_method.lambda_todo_api_get_method.http_method}/*"
 }
 
 
@@ -372,14 +477,15 @@ resource "aws_codebuild_project" "build_docker_image" {
   service_role  = aws_iam_role.code_build_role.arn
 
   source {
-    type            = "GITHUB"
-    location        = "https://github.com/maddyericksen/capstone2.git"
-    buildspec       = "buildspec.yml"
-    git_clone_depth = 1
+    type = "CODEPIPELINE"
+    # type            = "GITHUB"
+    # location        = "https://github.com/maddyericksen/capstone2.git"
+    # buildspec       = "buildspec.yml"
+    # git_clone_depth = 1
 
-    git_submodules_config {
-      fetch_submodules = false
-    }
+    # git_submodules_config {
+    #   fetch_submodules = false
+    # }
   }
 
   source_version = "main"
@@ -494,7 +600,7 @@ resource "aws_codebuild_webhook" "code_build_webhook" {
 
 
 ##
-##.Create teh CodePipeline
+## Create the CodePipeline
 ##
 resource "aws_codepipeline" "codepipeline" {
   name     = "${var.group_alias}-ecr-pipeline"
