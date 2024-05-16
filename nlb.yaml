@@ -5,7 +5,7 @@ metadata:
   annotations:
     service.beta.kubernetes.io/aws-load-balancer-type: external
     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
-    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: i
 spec:
   type: LoadBalancer
   ports:
@@ -16,3 +16,4 @@ spec:
     app.kubernetes.io/name: grp3-cap2a-cluster
     app.kubernetes.io/instance: grp3-cap2a-instance
     app.kubernetes.io/component: service
+    app: grp3-cap2a-cluster
