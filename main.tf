@@ -266,15 +266,15 @@ resource "aws_ecr_repository" "ecr_repo" {
 ## CodeBuild Project (with webhook)
 ##
 
-# ## Create an S3 bucket for the build output artifacts -- not needed for CODEPIPELINE output
-# resource "aws_s3_bucket" "build_artifact_bucket" {
-#   bucket  = "${var.group_alias}-build-artifacts"
-#   tags = {
-#     Name     = "${var.group_alias}-build-artifacts-bucket"
-#     Capstone = "${var.group_alias}"
-#     Description = "This bucket is used for ${var.group_alias} build artifacts output data"
-#   }
-# }
+## Create an S3 bucket for the pipeline -- not sure if needed...
+resource "aws_s3_bucket" "pipeline_bucket" {
+  bucket  = "${var.group_alias}-pipeline-artifacts"
+  tags = {
+    Name     = "${var.group_alias}-pipeline-artifacts-bucket"
+    Capstone = "${var.group_alias}"
+    Description = "This bucket is used for ${var.group_alias} pipeline artifacts data"
+  }
+}
 
 
 data "aws_iam_policy_document" "assume_role" {
@@ -296,7 +296,7 @@ resource "aws_iam_role" "code_build_role" {
   assume_role_policy = data.aws_iam_policy_document.assume_role.json
 }
 
-data "aws_iam_policy_document" "example" {
+data "aws_iam_policy_document" "policy_access" {
   statement {
     effect = "Allow"
 
@@ -328,23 +328,24 @@ data "aws_iam_policy_document" "example" {
   statement {
     effect    = "Allow"
     actions   = ["ec2:CreateNetworkInterfacePermission"]
-    resources = ["arn:aws:ec2:us-east-1:123456789012:network-interface/*"]
+    resources = ["*"]
+    # resources = ["arn:aws:ec2:us-west-2:123456789012:network-interface/*"]
 
-    condition {
-      test     = "StringEquals"
-      variable = "ec2:Subnet"
+    # condition {
+    #   test     = "StringEquals"
+    #   variable = "ec2:Subnet"
 
-      values = [
-        aws_subnet.example1.arn,
-        aws_subnet.example2.arn,
-      ]
-    }
+    #   values = [
+    #     aws_subnet.example1.arn,
+    #     aws_subnet.example2.arn,
+    #   ]
+    # }
 
-    condition {
-      test     = "StringEquals"
-      variable = "ec2:AuthorizedService"
-      values   = ["codebuild.amazonaws.com"]
-    }
+    # condition {
+    #   test     = "StringEquals"
+    #   variable = "ec2:AuthorizedService"
+    #   values   = ["codebuild.amazonaws.com"]
+    # }
   }
 
   # statement {
@@ -357,13 +358,10 @@ data "aws_iam_policy_document" "example" {
   # }
 }
 
-resource "aws_iam_role_policy" "example" {
-  role   = aws_iam_role.example.name
-  policy = data.aws_iam_policy_document.example.json
+resource "aws_iam_role_policy" "code_build_policy" {
+  role   = aws_iam_role.code_build_role.name
+  policy = data.aws_iam_policy_document.policy_access.json
 }
-
-
-
 
 
 ## Create the build project
@@ -451,7 +449,233 @@ resource "aws_codebuild_project" "build_docker_image" {
 }
 
 
+##
+## Define Source Credential for CodeBuild project
+##
+data "aws_secretsmanager_secret_version" "source_creds" {
+  # Fill in the name you gave to your secret
+  secret_id = "${var.group_alias}-tf-secrets"
+}
 
+locals {
+  cred_data = jsondecode(
+    data.aws_secretsmanager_secret_version.source_creds.secret_string
+  )
+}
+
+locals {
+  repo_cred = local.cred_data.github
+}
+
+## Define Source Credential for CodeBuild project
+resource "aws_codebuild_source_credential" "code_build_source_cred" {
+  auth_type   = "PERSONAL_ACCESS_TOKEN"
+  server_type = "GITHUB"
+  token       = local.repo_cred.access_token
+}
+
+## Define the webhook for GitHub
+resource "aws_codebuild_webhook" "code_build_webhook" {
+  project_name = aws_codebuild_project.build_docker_image.name
+  build_type   = "BUILD"
+  filter_group {
+    filter {
+      type    = "EVENT"
+      pattern = "PUSH"
+    }
+
+    filter {
+      type    = "BASE_REF"
+      pattern = "main"
+    }
+  }
+}
+
+
+
+##
+##.Create teh CodePipeline
+##
+resource "aws_codepipeline" "codepipeline" {
+  name     = "${var.group_alias}-ecr-pipeline"
+  role_arn = aws_iam_role.codepipeline_role.arn
+
+  artifact_store {
+    location = aws_s3_bucket.pipeline_bucket.bucket
+    type     = "S3"
+
+    # encryption_key {
+    #   id   = data.aws_kms_alias.s3kmskey.arn
+    #   type = "KMS"
+    # }
+  }
+
+  stage {
+    name = "Source"
+
+    action {
+      name             = "Source"
+      category         = "Source"
+      owner            = "AWS"
+      provider         = "CodeStarSourceConnection"
+      version          = "1"
+      output_artifacts = ["source_output"]
+
+      configuration = {
+        ConnectionArn    = aws_codestarconnections_connection.github_connection.arn
+        FullRepositoryId = "https://github.com/maddyericksen/capstone2.git"
+        BranchName       = "main"
+      }
+    }
+  }
+
+  stage {
+    name = "Build"
+
+    action {
+      name             = "Build"
+      category         = "Build"
+      owner            = "AWS"
+      provider         = "CodeBuild"
+      input_artifacts  = ["source_output"]
+      output_artifacts = ["build_output"]
+      version          = "1"
+
+      configuration = {
+        ProjectName = aws_codebuild_project.build_docker_image.name
+        EnvironmentVariables = jsonencode([
+          {
+            name  = "AWS_ACCOUNT_ID"
+            value = "${var.account_id}"
+            type  = "PLAINTEXT"
+          },
+          {
+            name  = "AWS_DEFAULT_REGION"
+            value = "${var.region}"
+            type  = "PLAINTEXT"
+          },
+          {
+            name  = "IMAGE_REPO_NAME"
+            value = "${var.group_alias}-ecr"
+            type  = "PLAINTEXT"
+          },
+          {
+            name  = "IMAGE_TAG"
+            value = "latest"
+            type  = "PLAINTEXT"
+          },
+          {
+            name  = "CONTAINER_NAME"
+            value = "react-app"
+            type  = "PLAINTEXT"
+          }
+        ])
+      }
+    }
+  }
+
+  stage {
+    name = "Deploy"
+
+    action {
+      name            = "Deploy"
+      category        = "Deploy"
+      owner           = "AWS"
+      provider        = "ECS"
+      input_artifacts = ["build_output"]
+      version         = "1"
+
+      configuration = {
+        ClusterName    = "${var.group_alias}-cluster"
+        ServiceName    = "${var.group_alias}-service"
+        FileName       = "imagedefinitions.json"
+        DeploymentTimeout: 15        
+      }
+    }
+  }
+}
+
+resource "aws_codestarconnections_connection" "github_connection" {
+  name          = "github-connection"
+  provider_type = "GitHub"
+}
+
+# resource "aws_s3_bucket" "codepipeline_bucket" {
+#   bucket = "test-bucket"
+# }
+
+# resource "aws_s3_bucket_public_access_block" "codepipeline_bucket_pab" {
+#   bucket = aws_s3_bucket.codepipeline_bucket.id
+
+#   block_public_acls       = true
+#   block_public_policy     = true
+#   ignore_public_acls      = true
+#   restrict_public_buckets = true
+# }
+
+data "aws_iam_policy_document" "pipeline_assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["codepipeline.amazonaws.com"]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "codepipeline_role" {
+  name               = "test-role"
+  assume_role_policy = data.aws_iam_policy_document.pipeline_assume_role.json
+}
+
+data "aws_iam_policy_document" "codepipeline_policy" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:GetBucketVersioning",
+      "s3:PutObjectAcl",
+      "s3:PutObject",
+    ]
+
+    resources = [
+      aws_s3_bucket.pipeline_bucket.arn,
+      "${aws_s3_bucket.pipeline_bucket.arn}/*"
+    ]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["codestar-connections:UseConnection"]
+    resources = [aws_codestarconnections_connection.github_connection.arn]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "codebuild:BatchGetBuilds",
+      "codebuild:StartBuild",
+    ]
+
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "codepipeline_policy" {
+  name   = "codepipeline_policy"
+  role   = aws_iam_role.codepipeline_role.id
+  policy = data.aws_iam_policy_document.codepipeline_policy.json
+}
+
+# data "aws_kms_alias" "s3kmskey" {
+#   name = "alias/myKmsKey"
+# }
 
 
 

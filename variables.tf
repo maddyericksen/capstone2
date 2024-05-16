@@ -15,6 +15,22 @@ variable "group_alias" {
 }
 
 ##
+## Capstone group infrastructure alias
+##
+variable "account_id" {
+  type        = string
+  description = "Class account id"
+}
+
+##
+## Capstone group infrastructure alias
+##
+variable "region" {
+  type        = string
+  description = "Default AWS Region"
+}
+
+##
 ## Todo application source data file name
 ##
 variable "todo_source_file" {

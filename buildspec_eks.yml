@@ -44,6 +44,7 @@ phases:
       - printf '[{"name":"'$CONTAINER_NAME'","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
       - kubectl apply -f deployment.yaml
       - kubectl apply -f service.yaml
+      - kubectl apply -f nlb.yaml
       - kubectl apply -f ingress.yaml
       - kubectl rollout restart -f deployment.yaml
       - kubectl get svc --all-namespaces
