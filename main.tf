@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 2.0.0"
     }
+    github = {
+      source = "integrations/github"
+      version = ">= 6.0.0"
+    }
   }
   backend "s3" {
     bucket = "grp3-cap2b-terraform"
@@ -20,6 +24,39 @@ terraform {
 provider "aws" {
   region = "us-west-2"
 }
+
+
+##
+## Define Credential variables for GitHub and CodePipeline
+##
+data "aws_secretsmanager_secret_version" "source_creds" {
+  secret_id = "${var.group_alias}-tf-secrets"
+}
+
+locals {
+  cred_data = jsondecode(
+    data.aws_secretsmanager_secret_version.source_creds.secret_string
+  )
+}
+
+locals {
+  repo_cred = local.cred_data.github.access_token
+}
+
+## Define Source Credential for CodeBuild project
+resource "aws_codebuild_source_credential" "code_build_source_cred" {
+  auth_type   = "PERSONAL_ACCESS_TOKEN"
+  server_type = "GITHUB"
+  token       = local.repo_cred
+}
+
+
+provider "github" {
+  token    = local.repo_cred
+  owner    = "${var.repo_owner}"
+  # base_url = "https://github.com/${var.repo_owner}/" # we have github enterprise
+}
+
 
 ##
 ## Create an S3 bucket to hold the application data.
@@ -368,7 +405,7 @@ resource "aws_ecr_repository" "ecr_repo" {
 
 
 ##
-## CodeBuild Project (with webhook)
+## CodeBuild Project (CodePipeline will have the webhook)
 ##
 
 ## Create an S3 bucket for the pipeline -- not sure if needed...
@@ -399,6 +436,10 @@ resource "aws_iam_role" "code_build_role" {
   name               = "${var.group_alias}-codebuild-role"
   description        = "Allows CodeBuild to call AWS services on your behalf."
   assume_role_policy = data.aws_iam_policy_document.assume_role.json
+  tags = {
+    Name     = "${var.group_alias}-codebuild-role"
+    Capstone = "${var.group_alias}"
+  }
 }
 
 data "aws_iam_policy_document" "policy_access" {
@@ -556,55 +597,17 @@ resource "aws_codebuild_project" "build_docker_image" {
 
 
 ##
-## Define Source Credential for CodeBuild project
-##
-data "aws_secretsmanager_secret_version" "source_creds" {
-  # Fill in the name you gave to your secret
-  secret_id = "${var.group_alias}-tf-secrets"
-}
-
-locals {
-  cred_data = jsondecode(
-    data.aws_secretsmanager_secret_version.source_creds.secret_string
-  )
-}
-
-locals {
-  repo_cred = local.cred_data.github
-}
-
-## Define Source Credential for CodeBuild project
-resource "aws_codebuild_source_credential" "code_build_source_cred" {
-  auth_type   = "PERSONAL_ACCESS_TOKEN"
-  server_type = "GITHUB"
-  token       = local.repo_cred.access_token
-}
-
-## Define the webhook for GitHub
-resource "aws_codebuild_webhook" "code_build_webhook" {
-  project_name = aws_codebuild_project.build_docker_image.name
-  build_type   = "BUILD"
-  filter_group {
-    filter {
-      type    = "EVENT"
-      pattern = "PUSH"
-    }
-
-    filter {
-      type    = "BASE_REF"
-      pattern = "main"
-    }
-  }
-}
-
-
-
-##
-## Create the CodePipeline
+## Create the CodePipeline and the webhook fo rit use for source changes
 ##
 resource "aws_codepipeline" "codepipeline" {
   name     = "${var.group_alias}-ecr-pipeline"
   role_arn = aws_iam_role.codepipeline_role.arn
+  pipeline_type = "V2"
+  execution_mode = "QUEUED"
+  tags = {
+    Name     = "${var.group_alias}-codepipeline"
+    Capstone = "${var.group_alias}"
+  }
 
   artifact_store {
     location = aws_s3_bucket.pipeline_bucket.bucket
@@ -622,16 +625,25 @@ resource "aws_codepipeline" "codepipeline" {
     action {
       name             = "Source"
       category         = "Source"
-      owner            = "AWS"
-      provider         = "CodeStarSourceConnection"
+      owner            = "ThirdParty"
+      provider         = "GitHub"
       version          = "1"
-      output_artifacts = ["source_output"]
+      output_artifacts = ["SourceArtifact"]
 
       configuration = {
-        ConnectionArn    = aws_codestarconnections_connection.github_connection.arn
-        FullRepositoryId = "https://github.com/maddyericksen/capstone2.git"
-        BranchName       = "main"
+        Repo        = "${var.repo_uri}"
+        Branch      = "${var.repo_branch}"
+        Owner       = "${var.repo_owner}"
+        OAuthToken  = "${local.repo_cred}"
+        PollForSourceChanges = false
       }
+      # owner            = "AWS"
+      # provider         = "CodeStarSourceConnection"
+      # configuration = {
+      #   ConnectionArn    = aws_codestarconnections_connection.github_connection.arn
+      #   FullRepositoryId = "https://github.com/maddyericksen/capstone2.git"
+      #   BranchName       = "main"
+      # }
     }
   }
 
@@ -643,8 +655,8 @@ resource "aws_codepipeline" "codepipeline" {
       category         = "Build"
       owner            = "AWS"
       provider         = "CodeBuild"
-      input_artifacts  = ["source_output"]
-      output_artifacts = ["build_output"]
+      input_artifacts  = ["SourceArtifact"]
+      output_artifacts = ["BuildArtifact"]
       version          = "1"
 
       configuration = {
@@ -688,7 +700,7 @@ resource "aws_codepipeline" "codepipeline" {
       category        = "Deploy"
       owner           = "AWS"
       provider        = "ECS"
-      input_artifacts = ["build_output"]
+      input_artifacts = ["BuildArtifact"]
       version         = "1"
 
       configuration = {
@@ -701,10 +713,54 @@ resource "aws_codepipeline" "codepipeline" {
   }
 }
 
-resource "aws_codestarconnections_connection" "github_connection" {
-  name          = "github-connection"
-  provider_type = "GitHub"
+
+resource "aws_codepipeline_webhook" "aws_webhook_to_github" {
+  name            = "${var.group_alias}-aws-webhook-github"
+  authentication  = "GITHUB_HMAC"
+  target_action   = "Source"
+  target_pipeline = aws_codepipeline.codepipeline.name
+  tags = {
+    Name     = "${var.group_alias}-aws-webhook-github"
+    Capstone = "${var.group_alias}"
+  }
+
+  authentication_configuration {
+    secret_token = local.repo_cred
+  }
+
+  filter {
+    json_path    = "$.ref"
+    match_equals = "refs/heads/{Branch}"
+  }
 }
+
+# Wire the CodePipeline webhook into a GitHub repository.
+# resource "github_repository" "github_repo" {
+#   name         = "${var.repo_uri}"
+#   description  = "${var.group_alias} Sample Application GitHub Repository"
+#   homepage_url = "https://github.com/${var.repo_owner}"
+#   visibility   = "public"
+# }
+
+resource "github_repository_webhook" "github_repo_webhook" {
+  repository = "${var.repo_uri}"
+  active = true
+
+  configuration {
+    url          = aws_codepipeline_webhook.aws_webhook_to_github.url
+    content_type = "json"
+    insecure_ssl = false
+    secret       = local.repo_cred
+  }
+
+  events = ["push"]
+}
+
+
+# resource "aws_codestarconnections_connection" "github_connection" {
+#   name          = "github-connection"
+#   provider_type = "GitHub"
+# }
 
 # resource "aws_s3_bucket" "codepipeline_bucket" {
 #   bucket = "test-bucket"
@@ -755,11 +811,11 @@ data "aws_iam_policy_document" "codepipeline_policy" {
     ]
   }
 
-  statement {
-    effect    = "Allow"
-    actions   = ["codestar-connections:UseConnection"]
-    resources = [aws_codestarconnections_connection.github_connection.arn]
-  }
+  # statement {
+  #   effect    = "Allow"
+  #   actions   = ["codestar-connections:UseConnection"]
+  #   resources = [aws_codestarconnections_connection.github_connection.arn]
+  # }
 
   statement {
     effect = "Allow"

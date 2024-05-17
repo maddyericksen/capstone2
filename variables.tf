@@ -38,3 +38,26 @@ variable "todo_source_file" {
   description = "Todo application source file name"
 }
 
+##
+## Todo application repository URI
+##
+variable "repo_uri" {
+  type        = string
+  description = "Todo application source repository URI"
+}
+
+##
+## Todo application branch name
+##
+variable "repo_branch" {
+  type        = string
+  description = "Todo application source repository branch"
+}
+
+##
+## Todo application repository owner
+##
+variable "repo_owner" {
+  type        = string
+  description = "Todo application source repository owner"
+}
