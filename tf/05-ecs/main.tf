@@ -27,30 +27,6 @@ provider "aws" {
 
 
 ##
-## Define Credential variables for GitHub and CodePipeline
-##
-data "aws_secretsmanager_secret_version" "source_creds" {
-  secret_id = "${var.group_alias}-tf-secrets"
-}
-
-locals {
-  cred_data = jsondecode(
-    data.aws_secretsmanager_secret_version.source_creds.secret_string
-  )
-}
-
-locals {
-  repo_cred = local.cred_data.github.access_token
-}
-
-provider "github" {
-  token    = local.repo_cred
-  owner    = "${var.repo_owner}"
-  # base_url = "https://github.com/${var.repo_owner}/" # we have github enterprise
-}
-
-
-##
 ## Create the ECS Fargate cluster and service
 ##
 
@@ -61,8 +37,16 @@ data "aws_vpc" "default" {
   default = true
 }
 
-data "aws_subnet_ids" "default" {
-  vpc_id = "${data.aws_vpc.default.id}"
+data "aws_subnets" "default" {
+  filter {
+    name = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+
+  filter {
+    name = "map-public-ip-on-launch"
+    values = [true]
+  }
 }
 
 data "aws_ecr_repository" "todos_repo" {
@@ -70,10 +54,51 @@ data "aws_ecr_repository" "todos_repo" {
 }
 
 
+##
+## Create the cluster
+##
+# resource "aws_kms_key" "example" {
+#   description             = "example"
+#   deletion_window_in_days = 7
+# }
+
+resource "aws_cloudwatch_log_group" "ecs_loggroup" {
+  name = "${var.group_alias}-ecs-loggroup"
+
+  tags = {
+    Name     = "${var.group_alias}-ecs-loggroup"
+    Capstone = "${var.group_alias}"
+    Application = "react-app"
+    }
+}
+
+resource "aws_ecs_cluster" "todos_cluster" {
+  name = "${var.group_alias}-cluster"
+  tags = {
+    Name     = "${var.group_alias}-cluster"
+    Capstone = "${var.group_alias}"
+  }
+
+  configuration {
+    execute_command_configuration {
+      # kms_key_id = aws_kms_key.example.arn
+      logging    = "OVERRIDE"
+
+      log_configuration {
+        cloud_watch_encryption_enabled = true
+        cloud_watch_log_group_name     = aws_cloudwatch_log_group.ecs_loggroup.name
+      }
+    }
+  }
+}
+
+
+
 ## Define security groups for the ALB
 resource "aws_security_group" "lb" {
   name        = "${var.group_alias}-alb-sg"
   description = "Controls access to the Application Load Balancer (ALB)"
+  vpc_id      = data.aws_vpc.default.id
 
   ingress {
     protocol    = "tcp"
@@ -97,6 +122,7 @@ resource "aws_security_group" "lb" {
 resource "aws_security_group" "ecs_tasks" {
   name        = "${var.group_alias}-ecs-tasks-sg"
   description = "Allow inbound access from the ALB only"
+  vpc_id      = data.aws_vpc.default.id
 
   ingress {
     protocol        = "tcp"
@@ -124,7 +150,7 @@ resource "aws_security_group" "ecs_tasks" {
 ##
 resource "aws_lb" "todos_alb" {
   name               = "${var.group_alias}-ecs-alb"
-  subnets            = data.aws_subnet_ids.default.ids
+  subnets            = data.aws_subnets.default.ids
   load_balancer_type = "application"
   security_groups    = [aws_security_group.lb.id]
 
@@ -165,15 +191,15 @@ resource "aws_lb_target_group" "todos_tg" {
     Application = "react-app"
   }
 
-  health_check {
-    healthy_threshold   = "3"
-    interval            = "90"
-    protocol            = "HTTP"
-    matcher             = "200-299"
-    timeout             = "20"
-    path                = "/"
-    unhealthy_threshold = "2"
-  }
+  # health_check {
+  #   healthy_threshold   = "3"
+  #   interval            = "90"
+  #   protocol            = "HTTP"
+  #   matcher             = "200-299"
+  #   timeout             = "20"
+  #   path                = "/"
+  #   unhealthy_threshold = "2"
+  # }
 }
 
 
@@ -222,7 +248,7 @@ resource "aws_ecs_task_definition" "task_def" {
   container_definitions = jsonencode([
     {
       name = "react-app"
-      image = "${aws_ecr_repository.todos_repo.url}:latest"
+      image = "${data.aws_ecr_repository.todos_repo.repository_url}:latest"
       cpu = 0
       portMappings = [
         {
@@ -232,7 +258,7 @@ resource "aws_ecs_task_definition" "task_def" {
           protocol = "tcp"
           appProtocol = "http"
         }
-      ],
+      ]
       essential = true
       environment = [
         {
@@ -243,13 +269,13 @@ resource "aws_ecs_task_definition" "task_def" {
       logConfiguration = {
           logDriver = "awslogs"
           options = {
-              awslogs-create-group = true
+              awslogs-create-group = "true"
               awslogs-group = "/ecs/${var.group_alias}-task-def"
               awslogs-region = "us-west-2"
               awslogs-stream-prefix = "ecs"
           }
       }
-    }]
+    } ] )
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -264,16 +290,16 @@ resource "aws_ecs_task_definition" "task_def" {
 
 
 resource "aws_ecs_service" "todos_service" {
-  name            = "staging"
+  name            = "${var.group_alias}-service"
   cluster         = aws_ecs_cluster.todos_cluster.id
-  task_definition = aws_ecs_task_definition.taskdef.arn
+  task_definition = aws_ecs_task_definition.task_def.arn
   desired_count   = 1
   launch_type     = "FARGATE"
 
   network_configuration {
     security_groups  = [aws_security_group.ecs_tasks.id]
-    subnets          = data.aws_subnet_ids.default.ids
-    assign_public_ip = true
+    subnets          = data.aws_subnets.default.ids
+    # assign_public_ip = true
   }
 
   load_balancer {
@@ -292,8 +318,9 @@ resource "aws_ecs_service" "todos_service" {
 }
 
 
-
-
+output "load_balancer_ip" {
+  value = aws_lb.todos_alb.dns_name
+}
 
 
 ##
