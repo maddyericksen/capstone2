@@ -31,3 +31,6 @@ yarn-error.log*
 # .tfstate files
 *.tfstate
 *.tfstate.*
+
+# Lambda function packaged Zip file
+/lambda/*.zip
