@@ -149,6 +149,12 @@ data "aws_iam_policy_document" "policy_access" {
   }
 
   statement {
+    effect    = "Allow"
+    actions   = ["ecs:*"]
+    resources = ["*"]
+  }
+
+  statement {
     effect  = "Allow"
     actions = ["s3:*"]
     resources = [
@@ -353,7 +359,7 @@ resource "aws_codepipeline" "codepipeline" {
       version         = "1"
 
       configuration = {
-        ClusterName    = "${var.group_alias}-cluster"
+        ClusterName    = "${var.group_alias}-ecs-cluster"
         ServiceName    = "${var.group_alias}-service"
         FileName       = "imagedefinitions.json"
         DeploymentTimeout: 15        
@@ -438,11 +444,30 @@ data "aws_iam_policy_document" "pipeline_assume_role" {
 }
 
 resource "aws_iam_role" "codepipeline_role" {
-  name               = "test-role"
+  name               = "${var.group_alias}-codepipeline-role"
   assume_role_policy = data.aws_iam_policy_document.pipeline_assume_role.json
 }
 
+
 data "aws_iam_policy_document" "codepipeline_policy" {
+  statement {
+    actions = [
+      "iam:PassRole"
+    ]
+    resources = ["*"]
+    effect = "Allow"
+    condition {
+      test = "StringEqualsIfExists"
+      variable = "iam:PassedToService"
+      values =[
+        "cloudformation.amazonaws.com",
+        "elasticbeanstalk.amazonaws.com",
+        "ec2.amazonaws.com",
+        "ecs-tasks.amazonaws.com"
+      ]
+    }
+  }
+
   statement {
     effect = "Allow"
 
@@ -459,6 +484,25 @@ data "aws_iam_policy_document" "codepipeline_policy" {
       "${aws_s3_bucket.pipeline_bucket.arn}/*"
     ]
   }
+
+  statement {
+    actions = [
+      "elasticbeanstalk:*",
+      "ec2:*",
+      "elasticloadbalancing:*",
+      "autoscaling:*",
+      "cloudwatch:*",
+      "s3:*",
+      "sns:*",
+      "cloudformation:*",
+      "rds:*",
+      "sqs:*",
+      "ecs:*"
+    ]
+    resources = ["*"]
+    effect = "Allow"
+  }
+   
 
   # statement {
   #   effect    = "Allow"
