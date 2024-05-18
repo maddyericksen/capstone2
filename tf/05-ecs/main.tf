@@ -63,7 +63,7 @@ data "aws_ecr_repository" "todos_repo" {
 # }
 
 resource "aws_cloudwatch_log_group" "ecs_loggroup" {
-  name = "${var.group_alias}-ecs-loggroup"
+  name = "/ecs/${var.group_alias}-task-def"
 
   tags = {
     Name     = "${var.group_alias}-ecs-loggroup"
@@ -73,9 +73,9 @@ resource "aws_cloudwatch_log_group" "ecs_loggroup" {
 }
 
 resource "aws_ecs_cluster" "todos_cluster" {
-  name = "${var.group_alias}-cluster"
+  name = "${var.group_alias}-ecs-cluster"
   tags = {
-    Name     = "${var.group_alias}-cluster"
+    Name     = "${var.group_alias}-ecs-cluster"
     Capstone = "${var.group_alias}"
   }
 
@@ -289,6 +289,13 @@ resource "aws_ecs_task_definition" "task_def" {
 }
 
 
+##
+## Create ECS Service Definition
+##
+data "aws_iam_role" "ecs_service_role" {
+  name = "AWSServiceRoleForECS"
+}
+
 resource "aws_ecs_service" "todos_service" {
   name            = "${var.group_alias}-service"
   cluster         = aws_ecs_cluster.todos_cluster.id
@@ -299,7 +306,7 @@ resource "aws_ecs_service" "todos_service" {
   network_configuration {
     security_groups  = [aws_security_group.ecs_tasks.id]
     subnets          = data.aws_subnets.default.ids
-    # assign_public_ip = true
+    assign_public_ip = true
   }
 
   load_balancer {
